@@ -128,6 +128,7 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" \
             "$TRIVY_IMAGE" image --scanners vuln --format json --output /reports/trivy-report.json "$IMAGE"
 
+      # Diagnostic kept from the CVE-2025-47273 investigation (see README)
       - name: Trivy language-package findings with file paths
         if: always()
         continue-on-error: true
@@ -139,7 +140,7 @@ jobs:
           docker image inspect "$IMAGE" --format '{{range .RootFS.Layers}}{{println .}}{{end}}'
           echo "--- Python package metadata in the image (pip / setuptools / wheel) ---"
           docker run --rm --entrypoint "" "$IMAGE" sh -c \
-            'find / -xdev \( -name "*.dist-info" -o -name "*.egg-info" -o -name "PKG-INFO" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"; grep -rlsE "^Version: 70\.3\.0" / --include=METADATA --include=PKG-INFO 2>/dev/null'
+            'find / -xdev \( -name "*.dist-info" -o -name "*.egg-info" -o -name "PKG-INFO" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"; grep -rlsE "^Version: 70\.3\.0" / --include=METADATA --include=PKG-INFO 2>/dev/null; true'
 
       # ---- DAST
       - name: Start application container
