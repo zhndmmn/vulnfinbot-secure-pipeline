@@ -1,0 +1,187 @@
+rules:
+  # ---------------------------------------------------------------- generic Python
+  - id: python-eval-use
+    languages: [python]
+    severity: ERROR
+    message: "eval() executes arbitrary code. Use ast.literal_eval or explicit parsing. (CWE-95)"
+    pattern: eval(...)
+    metadata: {cwe: "CWE-95", owasp: "A03:2021 Injection"}
+
+  - id: python-exec-use
+    languages: [python]
+    severity: ERROR
+    message: "exec() executes arbitrary code. (CWE-95)"
+    pattern: exec(...)
+    metadata: {cwe: "CWE-95"}
+
+  - id: subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: "subprocess with shell=True allows command injection. Pass an argument list. (CWE-78)"
+    pattern-either:
+      - pattern: subprocess.$F(..., shell=True, ...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+    metadata: {cwe: "CWE-78"}
+
+  - id: unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: "pickle/yaml.load on untrusted data allows code execution. Use json or yaml.safe_load. (CWE-502)"
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: yaml.load(...)
+      - pattern: yaml.unsafe_load(...)
+    metadata: {cwe: "CWE-502"}
+
+  - id: hardcoded-secret-assignment
+    languages: [python]
+    severity: WARNING
+    message: "Possible hard-coded secret. Load it from the environment or a secrets manager. (CWE-798)"
+    patterns:
+      - pattern: $NAME = "$VALUE"
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i).*(password|passwd|secret|api_?key|token|private_?key).*
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: .{8,}
+    metadata: {cwe: "CWE-798"}
+
+  - id: requests-tls-verification-disabled
+    languages: [python]
+    severity: ERROR
+    message: "TLS certificate verification disabled. (CWE-295)"
+    pattern: requests.$M(..., verify=False, ...)
+    metadata: {cwe: "CWE-295"}
+
+  - id: requests-without-timeout
+    languages: [python]
+    severity: WARNING
+    message: "HTTP call without timeout can hang workers (DoS, LLM10 for model calls)."
+    patterns:
+      - pattern: requests.$M(...)
+      - pattern-not: requests.$M(..., timeout=$T, ...)
+      - metavariable-regex: {metavariable: $M, regex: ^(get|post|put|delete|patch|request)$}
+
+  # ---------------------------------------------------------------- Flask
+  - id: flask-debug-enabled
+    languages: [python]
+    severity: ERROR
+    message: "Flask debug mode exposes the Werkzeug debugger (remote code execution). (CWE-489)"
+    pattern-either:
+      - pattern: $APP.run(..., debug=True, ...)
+      - pattern: $APP.debug = True
+    metadata: {cwe: "CWE-489"}
+
+  - id: flask-render-template-string
+    languages: [python]
+    severity: WARNING
+    message: "render_template_string with dynamic content risks server-side template injection. (CWE-1336)"
+    patterns:
+      - pattern: flask.render_template_string($X, ...)
+      - pattern-not: flask.render_template_string("...", ...)
+
+  - id: flask-bind-all-interfaces-hardcoded
+    languages: [python]
+    severity: INFO
+    message: "Server bound to all interfaces with a hard-coded host. Read the host from configuration."
+    pattern: $APP.run(..., host="0.0.0.0", ...)
+
+  - id: flask-returns-exception-details
+    languages: [python]
+    severity: WARNING
+    message: "Exception text returned to the client leaks internals. Return a generic error. (CWE-209)"
+    patterns:
+      - pattern-inside: |
+          try:
+            ...
+          except $E as $ERR:
+            ...
+      - pattern-either:
+          - pattern: "return jsonify(..., str($ERR), ...)"
+          - pattern: "return jsonify({..., $K: str($ERR), ...}, ...)"
+          - pattern: "return str($ERR)"
+          - pattern: "return traceback.format_exc()"
+    metadata: {cwe: "CWE-209"}
+
+  - id: logging-request-body
+    languages: [python]
+    severity: WARNING
+    message: "Logging raw request content can write personal data to logs. Log metadata only. (CWE-532)"
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.$LVL(..., request.get_json(...), ...)
+          - pattern: $LOG.$LVL(..., request.data, ...)
+          - pattern: $LOG.$LVL(..., $DATA["message"], ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: $LOG.$LVL(..., $V, ...)
+                  - pattern: $LOG.$LVL(f"...{$V}...", ...)
+              - metavariable-regex:
+                  metavariable: $V
+                  regex: ^(user_message|message|msg|prompt|body)$
+      - metavariable-regex:
+          metavariable: $LOG
+          regex: (?i)^(logging|log|logger|_?log|app\.logger|current_app\.logger)$
+      - metavariable-regex:
+          metavariable: $LVL
+          regex: ^(debug|info|warning|error|exception|critical)$
+    metadata: {cwe: "CWE-532"}
+
+  # ---------------------------------------------------------------- AI-specific
+  - id: llm-prompt-string-concatenation
+    languages: [python]
+    severity: WARNING
+    message: >-
+      User input concatenated into a system/instruction prompt (LLM01). Pass user
+      text as a separate 'user' role message and treat it as data.
+    patterns:
+      - pattern-either:
+          - pattern: $SYS + $USER
+          - pattern: f"...{$SYS}...{$USER}..."
+          - pattern: $SYS.format(..., $USER, ...)
+      - metavariable-regex:
+          metavariable: $SYS
+          regex: (?i).*(system|prompt|instruction).*
+      - metavariable-regex:
+          metavariable: $USER
+          regex: (?i).*(user|message|msg|input|query).*
+    metadata: {owasp-llm: "LLM01"}
+
+  - id: llm-output-exec
+    languages: [python]
+    severity: ERROR
+    message: "Model output passed to an interpreter or shell (LLM05). Never execute LLM output."
+    patterns:
+      - pattern-either:
+          - pattern: eval($OUT)
+          - pattern: exec($OUT)
+          - pattern: subprocess.$F($OUT, ...)
+          - pattern: os.system($OUT)
+      - metavariable-regex:
+          metavariable: $OUT
+          regex: (?i).*(response|completion|llm|model|output|answer).*
+    metadata: {owasp-llm: "LLM05"}
+
+  - id: llm-output-to-html-unescaped
+    languages: [python]
+    severity: ERROR
+    message: "Model output marked safe / rendered as HTML (LLM05 → XSS). Escape it."
+    pattern-either:
+      - pattern: markupsafe.Markup($X)
+      - pattern: flask.Markup($X)
+      - pattern: flask.render_template_string($X)
+    metadata: {owasp-llm: "LLM05"}
+
+  - id: llm-dynamic-tool-dispatch
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Tool chosen by name from model output via getattr/globals (LLM06). Use an
+      explicit allow-list and authorise each call in code.
+    pattern-either:
+      - pattern: getattr($MOD, $NAME)(...)
+      - pattern: globals()[$NAME](...)
+    metadata: {owasp-llm: "LLM06"}

@@ -1,0 +1,185 @@
+name: Security CI Pipeline
+
+on:
+  push:
+    branches: ["main", "vuln-demo"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  IMAGE: vulnfinbot:latest
+  TRIVY_IMAGE: aquasec/trivy:0.58.1
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+
+jobs:
+  # --------------------------------------------------------------- Step 4
+  tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: |
+          mkdir -p reports
+          pytest -v --junitxml=reports/pytest-report.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            reports/pytest-report.xml
+            reports/ai-security-report.md
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------- Steps 5–8, 10
+  security:
+    name: SAST, dependencies, container, DAST
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Prepare reports directory
+        run: mkdir -p reports && chmod 777 reports   # ZAP container writes as a non-root user
+
+      # ---- Unit + AI security tests (re-run so all reports land in one artifact)
+      - name: Unit and AI security tests
+        continue-on-error: true
+        run: pytest -v --junitxml=reports/pytest-report.xml
+
+      # ---- SAST
+      - name: Bandit
+        continue-on-error: true
+        run: |
+          bandit -r app/ run.py
+          bandit -r app/ run.py -f json -o reports/bandit-report.json
+
+      - name: Semgrep (custom rules)
+        continue-on-error: true
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          semgrep scan --config security/semgrep/rules.yml --metrics=off --error app/ run.py
+          semgrep scan --config security/semgrep/rules.yml --metrics=off --json --output reports/semgrep-report.json app/ run.py
+
+      # ---- Dependency scanning
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          pip-audit -r requirements.txt
+          pip-audit -r requirements.txt -f json -o reports/dependency-report.json
+
+      # ---- Container build + scan
+      - name: Build Docker image
+        run: docker build -t "$IMAGE" .
+
+      - name: Trivy image scan
+        continue-on-error: true
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" \
+            "$TRIVY_IMAGE" image --scanners vuln --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL "$IMAGE"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" \
+            "$TRIVY_IMAGE" image --scanners vuln --format json --output /reports/trivy-report.json "$IMAGE"
+
+      # ---- DAST
+      - name: Start application container
+        run: |
+          docker run -d --name vulnfinbot -p 5000:5000 "$IMAGE"
+          for i in $(seq 1 30); do curl -fsS http://localhost:5000/health && break; sleep 1; done
+          curl -fsS http://localhost:5000/health
+          curl -fsS -X POST http://localhost:5000/api/chat -H 'Content-Type: application/json' \
+            -d '{"message": "How can I manage my monthly budget?"}'
+
+      - name: OWASP ZAP baseline scan
+        continue-on-error: true
+        run: |
+          docker run --rm --network host -v "$PWD/reports:/zap/wrk/:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t http://localhost:5000 -J zap-report.json -r zap-report.html -I
+
+      - name: Container logs
+        if: always()
+        run: docker logs vulnfinbot || true
+
+      # ---- Step 10: centralised reporting + gate
+      - name: Security summary and gate
+        if: always()
+        run: python security/summarize.py --reports reports --gate
+
+      - name: Upload all security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnfinbot-security-reports
+          path: reports/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------- Step 9 with a real model
+  ai-llm:
+    name: AI security tests (real LLM)
+    needs: tests
+    runs-on: ubuntu-latest
+    continue-on-error: true          # model behaviour is informational; app controls are gated above
+    timeout-minutes: 20
+    env:
+      LLM_BACKEND: ollama
+      OLLAMA_MODEL: qwen2.5:0.5b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
+      - name: Start Ollama with a small model
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama:0.5.7
+          for i in $(seq 1 30); do curl -fsS http://localhost:11434/api/tags && break; sleep 1; done
+          docker exec ollama ollama pull "$OLLAMA_MODEL"
+
+      - name: Run AI security tests against the real model
+        run: |
+          mkdir -p reports
+          pytest -v tests/test_ai_security.py -rA || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-security-report-llm
+          path: reports/ai-security-report-llm.md
+          if-no-files-found: warn
