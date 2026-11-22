@@ -13,11 +13,12 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# Upgrade the packaging tools, install the app, then delete the ensurepip bundle:
-# its old pip wheel (and the setuptools code it carries) was flagged by Trivy
-# (CVE-2025-47273) and a runtime container never needs to bootstrap pip.
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt \
+# Install the app, then remove the packaging toolchain from the runtime image.
+# Trivy flagged setuptools 70.3.0 (CVE-2025-47273, HIGH): pip vendors pkg_resources
+# from that release and declares it in its embedded SBOM. The app never needs
+# pip/setuptools/wheel or the ensurepip bundle at runtime, so they are removed.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m pip uninstall -y pip setuptools wheel \
     && rm -rf /usr/local/lib/python3.12/ensurepip
 
 COPY app/ ./app/
