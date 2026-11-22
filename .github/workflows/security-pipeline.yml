@@ -3,8 +3,10 @@ name: Security CI Pipeline
 on:
   push:
     branches: ["main", "vuln-demo"]
+    paths-ignore: ["**.md"]          # documentation-only commits do not need a security run
   pull_request:
     branches: ["main"]
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 permissions:
@@ -95,23 +97,24 @@ jobs:
       - name: Bandit
         continue-on-error: true
         run: |
+          # JSON first (never fails the step), then the readable run whose exit code marks findings
+          bandit -r app/ run.py -f json -o reports/bandit-report.json || true
           bandit -r app/ run.py
-          bandit -r app/ run.py -f json -o reports/bandit-report.json
 
       - name: Semgrep (custom rules)
         continue-on-error: true
         env:
           SEMGREP_SEND_METRICS: "off"
         run: |
+          semgrep scan --config security/semgrep/rules.yml --metrics=off --json --output reports/semgrep-report.json app/ run.py || true
           semgrep scan --config security/semgrep/rules.yml --metrics=off --error app/ run.py
-          semgrep scan --config security/semgrep/rules.yml --metrics=off --json --output reports/semgrep-report.json app/ run.py
 
       # ---- Dependency scanning
       - name: pip-audit
         continue-on-error: true
         run: |
+          pip-audit -r requirements.txt -f json -o reports/dependency-report.json || true
           pip-audit -r requirements.txt
-          pip-audit -r requirements.txt -f json -o reports/dependency-report.json
 
       # ---- Container build + scan
       - name: Build Docker image
