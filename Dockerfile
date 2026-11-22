@@ -13,8 +13,12 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+# Upgrade the packaging tools, install the app, then delete the ensurepip bundle:
+# its old pip wheel (and the setuptools code it carries) was flagged by Trivy
+# (CVE-2025-47273) and a runtime container never needs to bootstrap pip.
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /usr/local/lib/python3.12/ensurepip
 
 COPY app/ ./app/
 COPY run.py .

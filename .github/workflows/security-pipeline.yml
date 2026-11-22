@@ -59,6 +59,7 @@ jobs:
   security:
     name: SAST, dependencies, container, DAST
     needs: tests
+    if: ${{ !cancelled() }}          # scan even when unit tests fail (e.g. the vuln-demo branch)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,10 +69,19 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install tools
+      - name: Install app and test dependencies
+        continue-on-error: true      # a broken dependency set must not stop the scanners
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+
+      - name: Install scanners in an isolated virtualenv
+        run: |
+          python -m venv "$RUNNER_TEMP/sectools"
+          "$RUNNER_TEMP/sectools/bin/pip" install -r security/requirements-tools.txt
+          mkdir -p "$RUNNER_TEMP/bin"   # expose only the scanner commands, not the venv's python
+          for t in bandit semgrep pip-audit; do ln -s "$RUNNER_TEMP/sectools/bin/$t" "$RUNNER_TEMP/bin/$t"; done
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Prepare reports directory
         run: mkdir -p reports && chmod 777 reports   # ZAP container writes as a non-root user
@@ -115,6 +125,17 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" \
             "$TRIVY_IMAGE" image --scanners vuln --format json --output /reports/trivy-report.json "$IMAGE"
 
+      - name: Trivy language-package findings with file paths
+        if: always()
+        continue-on-error: true
+        run: |
+          jq -r '.Results[]? | select(.Class=="lang-pkgs") | .Vulnerabilities[]?
+                 | "\(.Severity)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix")\t\(.VulnerabilityID)\t\(.PkgPath // "?")"' \
+            reports/trivy-report.json
+          echo "--- Python distributions present in the image ---"
+          docker run --rm --entrypoint "" "$IMAGE" sh -c \
+            'find / -xdev \( -name "*.dist-info" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"'
+
       # ---- DAST
       - name: Start application container
         run: |
@@ -152,6 +173,7 @@ jobs:
   ai-llm:
     name: AI security tests (real LLM)
     needs: tests
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     continue-on-error: true          # model behaviour is informational; app controls are gated above
     timeout-minutes: 20
