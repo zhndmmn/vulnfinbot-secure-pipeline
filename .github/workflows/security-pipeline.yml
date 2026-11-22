@@ -130,11 +130,13 @@ jobs:
         continue-on-error: true
         run: |
           jq -r '.Results[]? | select(.Class=="lang-pkgs") | .Vulnerabilities[]?
-                 | "\(.Severity)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix")\t\(.VulnerabilityID)\t\(.PkgPath // "?")"' \
+                 | "\(.Severity)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix")\t\(.VulnerabilityID)\t\(.PkgPath // "?")\tlayer=\(.Layer.DiffID // "?")"' \
             reports/trivy-report.json
-          echo "--- Python distributions present in the image ---"
+          echo "--- Image layers ---"
+          docker image inspect "$IMAGE" --format '{{range .RootFS.Layers}}{{println .}}{{end}}'
+          echo "--- Python package metadata in the image (pip / setuptools / wheel) ---"
           docker run --rm --entrypoint "" "$IMAGE" sh -c \
-            'find / -xdev \( -name "*.dist-info" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"'
+            'find / -xdev \( -name "*.dist-info" -o -name "*.egg-info" -o -name "PKG-INFO" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"; grep -rlsE "^Version: 70\.3\.0" / --include=METADATA --include=PKG-INFO 2>/dev/null'
 
       # ---- DAST
       - name: Start application container
