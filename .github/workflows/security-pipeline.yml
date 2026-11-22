@@ -115,6 +115,17 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/reports:/reports" \
             "$TRIVY_IMAGE" image --scanners vuln --format json --output /reports/trivy-report.json "$IMAGE"
 
+      - name: Trivy language-package findings with file paths
+        if: always()
+        continue-on-error: true
+        run: |
+          jq -r '.Results[]? | select(.Class=="lang-pkgs") | .Vulnerabilities[]?
+                 | "\(.Severity)\t\(.PkgName) \(.InstalledVersion) -> \(.FixedVersion // "no fix")\t\(.VulnerabilityID)\t\(.PkgPath // "?")"' \
+            reports/trivy-report.json
+          echo "--- Python distributions present in the image ---"
+          docker run --rm --entrypoint "" "$IMAGE" sh -c \
+            'find / -xdev \( -name "*.dist-info" -o -name "*.whl" \) 2>/dev/null | grep -Ei "pip|setuptools|wheel"'
+
       # ---- DAST
       - name: Start application container
         run: |
