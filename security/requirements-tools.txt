@@ -1,0 +1,4 @@
+# Scanners run in their own virtualenv so their dependencies never clash with the app's
+bandit==1.9.4
+semgrep==1.185.0
+pip-audit==2.10.1
