@@ -32,6 +32,8 @@ def create_app(config: dict | None = None) -> Flask:
 
     from .routes import bp
     app.register_blueprint(bp)
+    from .insecure_demo import demo   # vuln-demo only
+    app.register_blueprint(demo)
 
     @app.before_request
     def _request_id():

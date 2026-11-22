@@ -7,4 +7,4 @@ app = create_app()
 
 if __name__ == "__main__":
     # Localhost by default; Docker sets HOST=0.0.0.0. Debug mode is never enabled.
-    app.run(host=os.getenv("HOST", "127.0.0.1"), port=int(os.getenv("PORT", "5000")), debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=True)   # V12 debug mode, all interfaces

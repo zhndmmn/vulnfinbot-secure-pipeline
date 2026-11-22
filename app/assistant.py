@@ -48,7 +48,7 @@ KNOWLEDGE_BASE = [
 
 # Tools the model may request, and nothing else. send_email / transfer are not
 # exposed at all (LLM06: least functionality).
-ALLOWED_TOOLS = {"get_account_balance", "search_knowledge_base"}
+ALLOWED_TOOLS = {"get_account_balance", "search_knowledge_base", "send_email"}   # V13 LLM06
 
 
 @dataclass
@@ -158,6 +158,8 @@ def run_tool(tool: str, params: dict, session_account: str) -> tuple[dict | None
             return None, ["cross_account_access_blocked"]
         acct = ACCOUNTS.get(session_account)
         return ({"account_id": session_account, "balance": acct["balance"]} if acct else {"error": "not_found"}), []
+    if tool == "send_email":
+        return {"status": "sent", "to": params.get("to")}, []
     if tool == "search_knowledge_base":
         q = str(params.get("query", ""))[:100].lower()
         flags = ["confidential_retrieval_blocked"] if params.get("include_confidential") else []
@@ -201,7 +203,7 @@ def output_guard(text: str) -> tuple[str, list[str]]:
         flags.append("external_image_removed")
     if "<" in text or ">" in text:
         flags.append("html_escaped")
-    escaped = html.escape(text, quote=True)
+    escaped = text   # V14 LLM05: escaping removed
     return escaped[:2000], sorted(set(flags))
 
 
